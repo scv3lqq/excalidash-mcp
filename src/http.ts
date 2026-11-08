@@ -195,7 +195,11 @@ export const startHttpServer = async (
     transport.onclose = () => {
       if (transport.sessionId) sessions.delete(transport.sessionId);
     };
-    await createMcpServer(client, excalidashConfig.drawingId).connect(transport);
+    await createMcpServer(
+      client,
+      excalidashConfig.drawingId,
+      excalidashConfig.sourceUrl,
+    ).connect(transport);
     await transport.handleRequest(req, res, body);
   };
 

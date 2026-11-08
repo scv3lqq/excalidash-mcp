@@ -1,9 +1,9 @@
 {
   "name": "excalidash-mcp",
-  "version": "0.3.1",
+  "version": "0.4.0-library.1",
   "description": "MCP server for controlling self-hosted ExcaliDash drawings",
   "author": "Chaehyeon Lee",
-  "license": "MIT",
+  "license": "AGPL-3.0-only",
   "keywords": [
     "mcp",
     "excalidash",
@@ -15,15 +15,11 @@
     "excalidash-mcp": "dist/index.js"
   },
   "files": [
-    "dist/index.js",
-    "dist/index.js.map",
-    "dist/index.d.ts",
-    "dist/excalidash.js",
-    "dist/excalidash.js.map",
-    "dist/excalidash.d.ts",
-    "dist/http.js",
-    "dist/http.js.map",
-    "dist/http.d.ts"
+    "dist",
+    "!dist/**/*.test.*",
+    "LICENSE",
+    "LICENSE-MIT",
+    "PROVENANCE.md"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -32,17 +28,18 @@
     "test": "npm run build && node --test dist/**/*.test.js"
   },
   "dependencies": {
-    "@modelcontextprotocol/node": "^2.0.0",
-    "@modelcontextprotocol/server": "2.0.0",
-    "zod": "4.4.3"
+    "@modelcontextprotocol/node": "2.1.2",
+    "@modelcontextprotocol/server": "2.4.0",
+    "zod": "4.6.7"
   },
   "devDependencies": {
-    "@modelcontextprotocol/client": "^2.0.0",
+    "@modelcontextprotocol/client": "2.4.0",
     "@types/node": "^24.10.1",
     "typescript": "^5.9.3"
   },
   "overrides": {
-    "@hono/node-server": "2.0.10"
+    "@hono/node-server": "2.1.6",
+    "hono": "4.13.17"
   },
   "engines": {
     "node": ">=20"

@@ -85,3 +85,22 @@ test("HTTP failures are bounded and never include the configured token", async (
     return true;
   });
 });
+
+test("configFromEnv accepts an optional HTTPS corresponding source URL", () => {
+  const configured = configFromEnv({
+    EXCALIDASH_URL: "https://draw.example.test",
+    EXCALIDASH_API_KEY: "source-test-key",
+    MCP_SOURCE_URL: " https://source.example.test/source.tar.gz ",
+  }) as { sourceUrl?: string };
+  assert.equal(configured.sourceUrl, "https://source.example.test/source.tar.gz");
+});
+
+test("configFromEnv rejects invalid and non-HTTPS corresponding source URLs", () => {
+  for (const sourceUrl of ["http://source.example.test/source.tar.gz", "file:///source.tar.gz", "javascript:alert(1)", "invalid-url"]) {
+    assert.throws(() => configFromEnv({
+      EXCALIDASH_URL: "https://draw.example.test",
+      EXCALIDASH_API_KEY: "source-test-key",
+      MCP_SOURCE_URL: sourceUrl,
+    }), /MCP_SOURCE_URL must be an HTTPS URL/);
+  }
+});

@@ -1,7 +1,11 @@
+import { RestAdapter } from "./rest.js";
+
 export type ExcaliDashConfig = {
   url: string;
   token: string;
   drawingId?: string;
+  apiMode?: "rest";
+  sourceUrl?: string;
 };
 
 export type DrawingSummary = {
@@ -39,6 +43,18 @@ const apiBase = (url: string): string => {
   return base.endsWith("/api") ? base : `${base}/api`;
 };
 
+export const DEFAULT_SOURCE_URL = "https://github.com/scv3lqq/excalidash-mcp";
+
+export const validateSourceUrl = (value: string): string => {
+  const sourceUrl = value.trim();
+  try {
+    if (new URL(sourceUrl).protocol === "https:") return sourceUrl;
+  } catch {
+    // Report a configuration error without reflecting the supplied URL.
+  }
+  throw new Error("MCP_SOURCE_URL must be an HTTPS URL");
+};
+
 export const configFromEnv = (
   env: NodeJS.ProcessEnv = process.env,
 ): ExcaliDashConfig => {
@@ -54,17 +70,32 @@ export const configFromEnv = (
     );
   }
 
-  return { url, token, drawingId };
+  const apiMode = env.EXCALIDASH_API_MODE?.trim();
+  if (apiMode && apiMode !== "rest") {
+    throw new Error("EXCALIDASH_API_MODE must be rest or empty");
+  }
+  const sourceUrl = env.MCP_SOURCE_URL?.trim();
+  return {
+    url,
+    token,
+    drawingId,
+    ...(apiMode ? { apiMode: "rest" as const } : {}),
+    ...(sourceUrl ? { sourceUrl: validateSourceUrl(sourceUrl) } : {}),
+  };
 };
 
 export class ExcaliDashClient {
   private readonly baseUrl: string;
+  private readonly rest: RestAdapter | undefined;
 
   constructor(
     private readonly config: ExcaliDashConfig,
     private readonly fetchImpl: Fetch = globalThis.fetch,
   ) {
     this.baseUrl = apiBase(config.url);
+    this.rest = config.apiMode === "rest"
+      ? new RestAdapter((path, options) => this.request(path, options))
+      : undefined;
   }
 
   listDrawings(options: {
@@ -77,12 +108,13 @@ export class ExcaliDashClient {
       offset: String(options.offset ?? 0),
     });
     if (options.search) query.set("search", options.search);
+    if (this.rest) return this.rest.list(`drawings?${query}`);
     return this.request(`drawings?${query}`);
   }
 
   createDrawing(name: string): Promise<DrawingSummary> {
-    return this.request("drawings", {
-      method: "POST",
+    const options = {
+      method: "POST" as const,
       body: JSON.stringify({
         name,
         engine: "excalidraw",
@@ -90,13 +122,17 @@ export class ExcaliDashClient {
         appState: {},
         files: {},
       }),
-    });
+    };
+    if (this.rest) return this.rest.create(options);
+    return this.request("drawings", options);
   }
   getDrawing(drawingId: string): Promise<DrawingSummary> {
+    if (this.rest) return this.rest.get(drawingId);
     return this.request(`drawings/${encodeURIComponent(drawingId)}`);
   }
 
   getSummary(drawingId: string): Promise<string> {
+    if (this.rest) return this.rest.summary(drawingId);
     return this.request(
       `drawings/${encodeURIComponent(drawingId)}/summary`,
       { responseType: "text" },
@@ -104,6 +140,7 @@ export class ExcaliDashClient {
   }
 
   inspectElement(drawingId: string, elementId: string): Promise<unknown> {
+    if (this.rest) return this.rest.inspect(drawingId, elementId);
     return this.request(
       `drawings/${encodeURIComponent(drawingId)}/elements/${encodeURIComponent(elementId)}`,
     );
@@ -114,6 +151,7 @@ export class ExcaliDashClient {
     ops: unknown[],
     clientBatchId?: string,
   ): Promise<unknown> {
+    if (this.rest) return this.rest.apply(drawingId, ops, clientBatchId);
     return this.request(`drawings/${encodeURIComponent(drawingId)}/ops`, {
       method: "POST",
       body: JSON.stringify({ ops, ...(clientBatchId ? { clientBatchId } : {}) }),
@@ -123,31 +161,70 @@ export class ExcaliDashClient {
   private async request<T = unknown>(
     path: string,
     options: {
-      method?: "GET" | "POST";
+      method?: "GET" | "POST" | "PUT";
       body?: string;
       responseType?: "json" | "text";
     } = {},
   ): Promise<T> {
-    const response = await this.fetchImpl(`${this.baseUrl}/${path}`, {
-      method: options.method ?? "GET",
-      headers: {
-        Authorization: `Bearer ${this.config.token}`,
-        Accept:
-          options.responseType === "text" ? "text/plain" : "application/json",
-        ...(options.body ? { "Content-Type": "application/json" } : {}),
-      },
-      body: options.body,
-    });
-
-    if (!response.ok) {
-      const detail = (await response.text()).slice(0, 2000);
-      throw new ExcaliDashError(
-        `ExcaliDash request failed (${response.status})${detail ? `: ${detail}` : ""}`,
-        response.status,
-      );
+    try {
+      const response = await this.fetchImpl(`${this.baseUrl}/${path}`, {
+        method: options.method ?? "GET",
+        headers: {
+          Authorization: `Bearer ${this.config.token}`,
+          Accept: options.responseType === "text" ? "text/plain" : "application/json",
+          ...(options.body ? { "Content-Type": "application/json" } : {}),
+        },
+        body: options.body,
+        redirect: "error",
+        signal: AbortSignal.timeout(15_000),
+      });
+      const text = await readBoundedResponse(response);
+      if (!response.ok) {
+        const detail = this.redact(text);
+        const conflict = response.status === 409 && this.rest
+          ? "VERSION_CONFLICT: perform a fresh read before applying a new batch. "
+          : "";
+        throw new ExcaliDashError(
+          `${conflict}ExcaliDash request failed (${response.status})${detail ? `: ${detail}` : ""}`,
+          response.status,
+        );
+      }
+      return (options.responseType === "text" ? text : JSON.parse(text)) as T;
+    } catch (error) {
+      if (error instanceof ExcaliDashError) throw error;
+      throw new ExcaliDashError(this.redact(error instanceof Error ? error.message : "Request failed"));
     }
+  }
 
-    if (options.responseType === "text") return (await response.text()) as T;
-    return (await response.json()) as T;
+  private redact(text: string): string {
+    return text.split(this.config.token).join("[REDACTED]").slice(0, 2000);
+  }
+}
+
+const MAX_RESPONSE_BYTES = 10 * 1024 * 1024;
+
+async function readBoundedResponse(response: Response): Promise<string> {
+  if (Number(response.headers.get("content-length")) > MAX_RESPONSE_BYTES) {
+    await response.body?.cancel();
+    throw new ExcaliDashError("HTTP response exceeds 10 MiB limit");
+  }
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      length += value.byteLength;
+      if (length > MAX_RESPONSE_BYTES) {
+        await reader.cancel();
+        throw new ExcaliDashError("HTTP response exceeds 10 MiB limit");
+      }
+      chunks.push(value);
+    }
+    return Buffer.concat(chunks, length).toString("utf8");
+  } finally {
+    reader.releaseLock();
   }
 }

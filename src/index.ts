@@ -2,7 +2,12 @@
 import { McpServer } from "@modelcontextprotocol/server";
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import * as z from "zod/v4";
-import { configFromEnv, ExcaliDashClient } from "./excalidash.js";
+import {
+  configFromEnv,
+  DEFAULT_SOURCE_URL,
+  ExcaliDashClient,
+  validateSourceUrl,
+} from "./excalidash.js";
 
 const style = z.record(z.string(), z.unknown());
 const id = z.string().min(1);
@@ -98,8 +103,12 @@ const errorResult = (error: unknown) => ({
 export const createServer = (
   client: ExcaliDashClient,
   initialDrawingId?: string,
+  sourceUrl: string = DEFAULT_SOURCE_URL,
 ): McpServer => {
-  const server = new McpServer({ name: "excalidash-mcp", version: "0.3.1" });
+  const correspondingSourceUrl = validateSourceUrl(sourceUrl);
+  const server = new McpServer({ name: "excalidash-mcp", version: "0.4.0-library.1" }, {
+    instructions: `This adapted MCP contains AGPL-3.0-only code. Complete corresponding buildable source is available at ${correspondingSourceUrl} . In REST mode, snapshot restoration is unavailable. On VERSION_CONFLICT, perform a fresh read before applying a new batch. clientBatchId provides correlation only; after uncertain network outcomes, reread the drawing before deciding on another batch.`,
+  });
   let selectedDrawingId = initialDrawingId;
 
   const resolveDrawingId = (drawingId?: string): string => {
@@ -283,6 +292,7 @@ const main = async (): Promise<void> => {
   const server = createServer(
     new ExcaliDashClient(config),
     config.drawingId,
+    config.sourceUrl,
   );
   await server.connect(new StdioServerTransport());
 };

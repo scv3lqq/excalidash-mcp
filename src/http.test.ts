@@ -65,6 +65,7 @@ test("Streamable HTTP keeps drawing selection isolated in its MCP session", asyn
     EXCALIDASH_API_KEY: "container-test-key",
     MCP_HTTP_HOST: "127.0.0.1",
     MCP_HTTP_PORT: "0",
+    MCP_SOURCE_URL: "https://source.example.test/http-source.tar.gz",
   });
   const address = server.address();
   assert.ok(address && typeof address === "object");
@@ -79,6 +80,7 @@ test("Streamable HTTP keeps drawing selection isolated in its MCP session", asyn
 
   try {
     await client.connect(transport);
+    assert.ok(client.getInstructions()?.includes("https://source.example.test/http-source.tar.gz"));
     const listed = await client.callTool({ name: "list_drawings", arguments: {} });
     assert.equal(listed.isError, undefined);
 
