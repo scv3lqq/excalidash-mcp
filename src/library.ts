@@ -183,7 +183,7 @@ export function prepareLibraryInsert(drawing: unknown, item: LibraryItem, option
     coordinate(element.x, "inserted x"); coordinate(element.y, "inserted y");
     if (Array.isArray(source.groupIds)) element.groupIds = (source.groupIds as string[]).map(group => groups.get(group)!);
     for (const key of ["containerId", "frameId"]) if (source[key] !== undefined) element[key] = ids.get(source[key] as string) ?? null;
-    if (Array.isArray(source.boundElements)) element.boundElements = source.boundElements.filter(ref => ids.has((ref as { id: string }).id)).map(ref => ({ ...ref, id: ids.get((ref as { id: string }).id)! }));
+    if (Array.isArray(source.boundElements)) element.boundElements = source.boundElements.filter(ref => ids.has((ref as { id: string }).id)).map(ref => ({ ...structuredClone(ref), id: ids.get((ref as { id: string }).id)! }));
     for (const key of ["startBinding", "endBinding"]) if (source[key] !== undefined) {
       const binding = source[key];
       element[key] = record(binding) && ids.has(binding.elementId as string) ? { ...structuredClone(binding), elementId: ids.get(binding.elementId as string)! } : null;

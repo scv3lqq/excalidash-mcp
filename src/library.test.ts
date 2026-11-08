@@ -95,6 +95,20 @@ test("insert twice remaps element/groups and internal refs, detaches external re
   assert.deepEqual(added[0]?.customData, { nested: ["retained"] });
 });
 
+test("insertion deep-clones nested custom fields inside internal bound references", () => {
+  const source = icon();
+  const sourceRef = { id: "label", type: "text", custom: { nested: { value: "source" } } };
+  source.elements[0]!.boundElements = [sourceRef];
+  const before = structuredClone(source);
+  const prepared = prepareLibraryInsert(drawing(), source, {});
+  const inserted = prepared.elements[2]!;
+  const references = inserted.boundElements as { id: string; custom: { nested: { value: string } } }[];
+  assert.equal(references[0]?.id, prepared.createdIds[1]);
+  references[0]!.custom.nested.value = "changed";
+  assert.equal(sourceRef.custom.nested.value, "source");
+  assert.deepEqual(source, before);
+});
+
 test("internal frames are remapped and deleted references detach", () => {
   const source = { id: "framed", elements: [shape("frame", { type: "frame" }), shape("child", { frameId: "frame", containerId: "deleted", startBinding: { elementId: "deleted" } }), shape("deleted", { isDeleted: true })] };
   const prepared = prepareLibraryInsert(drawing(), source, {});
