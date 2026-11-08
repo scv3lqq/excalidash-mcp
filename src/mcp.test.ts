@@ -143,9 +143,12 @@ test("stdio MCP server lists and executes ExcaliDash tools end to end", async ()
         "apply_drawing_ops",
         "create_drawing",
         "get_drawing_summary",
+        "get_library_item",
         "get_selected_drawing",
+        "insert_library_item",
         "inspect_drawing_element",
         "list_drawings",
+        "list_library_items",
         "select_drawing",
       ],
     );

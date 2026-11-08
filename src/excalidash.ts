@@ -1,4 +1,16 @@
 import { RestAdapter } from "./rest.js";
+import {
+  assertLibraryItemInsertable,
+  listLibraryItems as selectLibraryItems,
+  parseLibrary,
+  prepareLibraryInsert,
+  validateInsertOptions,
+  validateLibraryDrawing,
+  type InsertLibraryOptions,
+  type LibraryItem,
+  type LibraryListOptions,
+  type LibraryPage,
+} from "./library.js";
 
 export type ExcaliDashConfig = {
   url: string;
@@ -156,6 +168,36 @@ export class ExcaliDashClient {
       method: "POST",
       body: JSON.stringify({ ops, ...(clientBatchId ? { clientBatchId } : {}) }),
     });
+  }
+
+  async listLibraryItems(options: LibraryListOptions = {}): Promise<LibraryPage & { previewItems: LibraryItem[] }> {
+    const items = parseLibrary(await this.request("library"));
+    const page = selectLibraryItems(items, options);
+    const byId = new Map(items.map(item => [item.id, item]));
+    return { ...page, previewItems: page.items.map(item => byId.get(item.id)!) };
+  }
+
+  async getLibraryItem(itemId: string): Promise<LibraryItem> {
+    const items = parseLibrary(await this.request("library"));
+    const item = items.find(candidate => candidate.id === itemId);
+    if (!item) throw new ExcaliDashError("Library item not found", 404);
+    return item;
+  }
+
+  async insertLibraryItem(drawingId: string, itemId: string, options: InsertLibraryOptions = {}): Promise<{ drawingId: string; libraryItemId: string; version: number; createdIds: string[]; elementCount: number }> {
+    if (!this.rest) throw new ExcaliDashError("Library insertion requires REST mode", 422);
+    validateInsertOptions(options);
+    const item = await this.getLibraryItem(itemId);
+    assertLibraryItemInsertable(item);
+    const path = `drawings/${encodeURIComponent(drawingId)}`;
+    const prepared = prepareLibraryInsert(await this.request(path), item, options);
+    const body = JSON.stringify({ elements: prepared.elements, version: prepared.version });
+    if (Buffer.byteLength(body, "utf8") > MAX_RESPONSE_BYTES) throw new ExcaliDashError("Drawing request exceeds 10 MiB limit", 422);
+    // Append directly: generic semantic operations reroute existing arrow bindings.
+    const saved = validateLibraryDrawing(await this.request(path, { method: "PUT", body }));
+    const savedIds = new Set(saved.elements.map(element => element.id as string));
+    if (prepared.createdIds.some(id => !savedIds.has(id))) throw new ExcaliDashError("Saved drawing is missing inserted library elements");
+    return { drawingId, libraryItemId: itemId, version: saved.version, createdIds: prepared.createdIds, elementCount: prepared.createdIds.length };
   }
 
   private async request<T = unknown>(
