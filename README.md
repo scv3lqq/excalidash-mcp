@@ -335,3 +335,47 @@ Docker, Alpine browser support, a 256 MiB memory budget or production deployment
 
 The repository skill at [.agents/skills/excalidash/SKILL.md](.agents/skills/excalidash/SKILL.md)
 describes architecture, flowchart, targeted editing and messy-layout workflows.
+
+## Optional sandboxed browser container
+
+`Dockerfile.browser` adds full Chromium for the existing official scene renderer.
+Both stages pin Node.js 22 on Debian Bookworm by digest; the installed browser is
+selected by the pinned `playwright-core@1.65.0` manifest. Browser files, official
+renderer assets and retained licenses are included in the image. The original
+Alpine `Dockerfile` and `make docker-smoke` remain available.
+
+Use a Linux Docker host with unprivileged user namespaces and AppArmor ABI 4.0.
+An administrator must review, parse and load the dedicated
+`excalidash-mcp-browser` policy in `runtime/apparmor.profile` before running the
+browser container. Preserve any existing different policy under that name.
+The policy retains Moby's container denials and scoped signal/ptrace peers, adding
+user namespaces and explicit Unix socket access. The vendored Playwright seccomp
+profile keeps default-deny filtering. Pinned sources, adaptations and Apache
+licenses are recorded in [runtime/PROVENANCE.md](runtime/PROVENANCE.md).
+
+Run the static runtime checks and the isolated browser smoke:
+
+```sh
+node --test scripts/browser-runtime.test.mjs
+make browser-smoke
+```
+
+The browser smoke runs without network or backend credentials, as `node`, with a
+read-only root filesystem, no capabilities, no-new-privileges and both named
+security policies. It uses 2 GiB RAM, 2 CPUs, 512 PIDs, an init process, 256 MiB
+private shared memory and a 256 MiB `/tmp` tmpfs with `noexec,nosuid,nodev`.
+Keep these confinement settings in the browser deployment's private Compose file;
+retain its existing authentication, network and loopback port configuration.
+
+The smoke requires non-root execution, empty effective capabilities, seccomp
+filtering, and positive namespace/seccomp-BPF status from `chrome://sandbox`.
+It then renders an invented negative-coordinate Client/HTTPS/API scene through
+the existing renderer, checks PNG dimensions, renderer/version metadata and source
+immutability, and prints compact proof without image bytes. It performs no backend
+calls or drawing writes. A successful static check alone does not certify Linux
+sandbox operation; the isolated smoke must pass on the actual deployment host.
+
+Never use sandbox-disabling Chromium flags, privileged mode, `SYS_ADMIN`, an
+unconfined security profile, or host-wide policy changes to make rendering work.
+Preserve the full source, this browser Dockerfile, runtime policies and notices
+when distributing the browser image.
