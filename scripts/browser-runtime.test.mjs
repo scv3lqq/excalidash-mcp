@@ -31,11 +31,19 @@ test("browser image pins both stages, installs manifest Chromium and preserves n
 
 test("seccomp preserves the pinned default-deny profile and namespace allowlist", async () => {
   const raw = await read("runtime/seccomp.json");
-  assert.equal(digest(raw), "cc3e61cabda6bbc1e53e54d27ba4d55a9d3be829b6dd1a596f4a7b31b1cc7849");
+  const original = await read("runtime/seccomp.upstream.json");
+  assert.equal(digest(original), "cc3e61cabda6bbc1e53e54d27ba4d55a9d3be829b6dd1a596f4a7b31b1cc7849");
+  const upstream = JSON.parse(original);
+  const expected = structuredClone(upstream);
+  expected.syscalls.splice(1, 0, {
+    comment: "Allow Chromium sandbox chroot inside its unprivileged user namespace; kernel capability checks remain enforced",
+    names: ["chroot"], action: "SCMP_ACT_ALLOW", args: [], includes: {}, excludes: {},
+  });
   const profile = JSON.parse(raw);
+  assert.deepEqual(profile, expected, "Only the namespaced Chromium chroot allow may differ from upstream");
   assert.equal(profile.defaultAction, "SCMP_ACT_ERRNO");
   const unconditional = profile.syscalls.filter(rule => rule.action === "SCMP_ACT_ALLOW" && !rule.args?.length && !Object.keys(rule.includes ?? {}).length);
-  for (const name of ["clone", "setns", "unshare"]) assert.ok(unconditional.some(rule => rule.names.includes(name)), name);
+  for (const name of ["clone", "setns", "unshare", "chroot"]) assert.ok(unconditional.some(rule => rule.names.includes(name)), name);
   for (const name of ["mount", "bpf", "reboot", "init_module"]) assert.ok(!unconditional.some(rule => rule.names.includes(name)), name);
 });
 
@@ -123,4 +131,20 @@ test("sandbox browser receives only a credential-free environment after executab
   const smoke = await read("scripts/browser-smoke.mjs");
   assert.match(smoke, /chromium\.launch\(browserLaunchOptions\(chromium\.executablePath\(\)\)\)/);
   assert.doesNotMatch(smoke, /process\.env/);
+});
+
+
+test("modern Chromium sandbox report requires namespace layer, PID, network and seccomp", async () => {
+  const { verifySandbox } = await import("./browser-smoke.mjs");
+  const report = "Layer 1 Sandbox\tNamespace\nPID namespaces\tYes\nNetwork namespaces\tYes\nSeccomp-BPF sandbox\tYes";
+  assert.doesNotThrow(() => verifySandbox(report));
+  for (const [positive, negative] of [
+    ["Layer 1 Sandbox\tNamespace", "Layer 1 Sandbox\tNone"],
+    ["PID namespaces\tYes", "PID namespaces\tNo"],
+    ["Network namespaces\tYes", "Network namespaces\tNo"],
+    ["Seccomp-BPF sandbox\tYes", "Seccomp-BPF sandbox\tNo"],
+  ]) {
+    assert.throws(() => verifySandbox(report.replace(positive, negative)), positive);
+    assert.throws(() => verifySandbox(report.replace(positive, "")), `Missing ${positive}`);
+  }
 });

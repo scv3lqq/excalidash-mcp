@@ -5,13 +5,21 @@ change the Alpine runtime or the host's global security policy.
 
 ## Playwright seccomp
 
-`seccomp.json` is an unmodified copy of Microsoft's official
+`seccomp.upstream.json` is an unmodified copy of Microsoft's official
 [Playwright Docker profile](https://github.com/microsoft/playwright/blob/84e2bdcaa5a6e4a9e8afcbe8b1bca4ff8a8cb69a/utils/docker/seccomp_profile.json),
 commit `84e2bdcaa5a6e4a9e8afcbe8b1bca4ff8a8cb69a`.
 Its SHA-256 is
 `cc3e61cabda6bbc1e53e54d27ba4d55a9d3be829b6dd1a596f4a7b31b1cc7849`.
-It retains default-deny filtering and permits the namespace operations needed by
-Chromium's sandbox. Upstream license: [LICENSE-PLAYWRIGHT](LICENSE-PLAYWRIGHT),
+`seccomp.json` retains that complete parsed profile and inserts exactly one
+unconditional `SCMP_ACT_ALLOW` rule for `chroot` at `syscalls[1]`, with empty
+`args`, `includes`, and `excludes`. Its SHA-256 is
+`d51db786ddbe1e69133120500c852e733889230bfa7fbe1377c4b44b9fc42a92`.
+This permits Chromium's chroot within its unprivileged user namespace when the
+container drops all initial capabilities; the original conditional rule requires
+`CAP_SYS_CHROOT` in the container's capability set. Kernel capability and filesystem
+checks still apply. No capability is added, and all original rules, namespace
+permissions and default-deny filtering remain. The only byte differences from the
+upstream JSON are the inserted rule. Upstream license: [LICENSE-PLAYWRIGHT](LICENSE-PLAYWRIGHT),
 Apache-2.0, retained verbatim from the same commit.
 
 ## Moby AppArmor

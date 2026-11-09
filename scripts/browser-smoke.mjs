@@ -11,8 +11,12 @@ export function verifyConfinement(uid, status) {
 }
 
 export function verifySandbox(report) {
-  assert.match(report, /Namespace sandbox\s+Yes\b/i, "Namespace sandbox must be enabled");
-  assert.match(report, /Seccomp-BPF sandbox\s+Yes\b/i, "Seccomp-BPF sandbox must be enabled");
+  const legacyNamespace = /^Namespace sandbox[ \t]+Yes[ \t]*\r?$/im.test(report);
+  const modernNamespace = /^Layer 1 Sandbox[ \t]+Namespace[ \t]*\r?$/im.test(report)
+    && /^PID namespaces[ \t]+Yes[ \t]*\r?$/im.test(report)
+    && /^Network namespaces[ \t]+Yes[ \t]*\r?$/im.test(report);
+  assert.ok(legacyNamespace || modernNamespace, "Namespace sandbox must be enabled with positive PID and network evidence");
+  assert.match(report, /^Seccomp-BPF sandbox[ \t]+Yes[ \t]*\r?$/im, "Seccomp-BPF sandbox must be enabled");
 }
 
 export function verifyRender(scene, snapshot, result) {

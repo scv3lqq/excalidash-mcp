@@ -63,6 +63,16 @@
 			"excludes": {}
 		},
 		{
+			"comment": "Allow Chromium sandbox chroot inside its unprivileged user namespace; kernel capability checks remain enforced",
+			"names": [
+				"chroot"
+			],
+			"action": "SCMP_ACT_ALLOW",
+			"args": [],
+			"includes": {},
+			"excludes": {}
+		},
+		{
 			"names": [
 				"accept",
 				"accept4",
