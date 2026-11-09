@@ -18,6 +18,9 @@ jobs:
     name: Library contract
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    env:
+      # Ubuntu's packaged Chrome already has its scoped AppArmor userns profile.
+      EXCALIDASH_RENDER_BROWSER: /opt/google/chrome/chrome
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -30,8 +33,10 @@ jobs:
           cache: npm
       - name: Install pinned dependencies
         run: npm ci --ignore-scripts
-      - name: Install pinned sandboxed Chromium
-        run: npx --no-install playwright-core install --with-deps chromium
+      - name: Verify sandbox-capable system Chrome
+        run: |
+          test -x "$EXCALIDASH_RENDER_BROWSER"
+          "$EXCALIDASH_RENDER_BROWSER" --version
       - name: Typecheck, test, and audit
         run: make check
       - name: Verify native Alpine PNG rendering
