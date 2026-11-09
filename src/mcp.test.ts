@@ -142,6 +142,7 @@ test("stdio MCP server lists and executes ExcaliDash tools end to end", async ()
       [
         "apply_drawing_ops",
         "create_drawing",
+        "get_drawing_elements",
         "get_drawing_summary",
         "get_library_item",
         "get_selected_drawing",
@@ -149,7 +150,9 @@ test("stdio MCP server lists and executes ExcaliDash tools end to end", async ()
         "inspect_drawing_element",
         "list_drawings",
         "list_library_items",
+        "render_drawing",
         "select_drawing",
+        "validate_drawing",
       ],
     );
 
@@ -222,5 +225,64 @@ test("stdio MCP server lists and executes ExcaliDash tools end to end", async ()
   } finally {
     await client.close();
     await api.close();
+  }
+});
+
+test("analysis tools read the same REST scene and stale MCP mutations retain structured conflict details", async () => {
+  const { createServer: createMcpServer } = await import("./index.js");
+  const { ExcaliDashClient } = await import("./excalidash.js");
+  const { InMemoryTransport } = await import("@modelcontextprotocol/server");
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  let gets = 0;
+  let puts = 0;
+  const drawing = { id: "selected", version: 9, elements: [
+    { id: "shape", type: "rectangle", x: -50, y: 20, width: 100, height: 80, customData: { retained: true } },
+  ], appState: { viewBackgroundColor: "#fff" }, files: {} };
+  const apiClient = new ExcaliDashClient({ url: "https://draw.example.test", token: "synthetic-token", apiMode: "rest" }, async (_input, init) => {
+    assert.equal((init?.headers as Record<string, string>).Authorization, "Bearer synthetic-token");
+    if (init?.method === "PUT") puts += 1;
+    else gets += 1;
+    return Response.json(drawing);
+  });
+  const server = createMcpServer(apiClient, "selected");
+  const client = new Client({ name: "analysis-contract-test", version: "1" });
+  try {
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    const listed = await client.listTools();
+    for (const name of ["get_drawing_elements", "validate_drawing", "render_drawing"]) assert.deepEqual(listed.tools.find(tool => tool.name === name)?.annotations, { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false });
+    const inspected = await client.callTool({ name: "get_drawing_elements", arguments: { mode: "detailed", ids: ["shape"] } });
+    assert.equal(inspected.isError, undefined);
+    assert.equal(inspected.content[0]?.type, "text");
+    const inspection = JSON.parse(inspected.content[0]?.type === "text" ? inspected.content[0].text : "{}") as { version: number; elements: { id: string; customData?: unknown }[] };
+    assert.equal(inspection.version, 9);
+    assert.deepEqual(inspection.elements[0]?.customData, { retained: true });
+    const validated = await client.callTool({ name: "validate_drawing", arguments: {} });
+    assert.equal(validated.isError, undefined);
+    const validation = JSON.parse(validated.content[0]?.type === "text" ? validated.content[0].text : "{}") as { version: number; skippedChecks: unknown[] };
+    assert.equal(validation.version, 9);
+    assert.ok(validation.skippedChecks.length > 0);
+    const stale = await client.callTool({ name: "apply_drawing_ops", arguments: { ops: [{ op: "move", id: "shape", dx: 10 }], expectedRevision: 8 } });
+    assert.equal(stale.isError, true);
+    assert.deepEqual(stale.structuredContent, { error: { code: "VERSION_CONFLICT", expectedRevision: 8, actualRevision: 9 } });
+    assert.match(stale.content[0]?.type === "text" ? stale.content[0].text : "", /fresh read/);
+    const stalePage = await client.callTool({ name: "get_drawing_elements", arguments: { offset: 1, expectedRevision: 8 } });
+    assert.equal(stalePage.isError, true);
+    assert.deepEqual(stalePage.structuredContent, { error: { code: "VERSION_CONFLICT", expectedRevision: 8, actualRevision: 9 } });
+    assert.equal(gets, 4);
+    assert.equal(puts, 0);
+    const invalidRender = await client.callTool({ name: "render_drawing", arguments: { region: { x: 0, y: 0, width: 10, height: 10 }, elementIds: ["shape"] } });
+    assert.equal(invalidRender.isError, true);
+    assert.match(invalidRender.content[0]?.type === "text" ? invalidRender.content[0].text : "", /mutually exclusive/);
+    assert.equal(gets, 4);
+    for (const expectedRevision of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      const invalid = await client.callTool({ name: "apply_drawing_ops", arguments: { ops: [{ op: "move", id: "shape", dx: 10 }], expectedRevision } });
+      assert.equal(invalid.isError, true);
+    }
+    assert.equal(gets, 4);
+    assert.equal(puts, 0);
+  } finally {
+    await client.close();
+    await server.close();
   }
 });

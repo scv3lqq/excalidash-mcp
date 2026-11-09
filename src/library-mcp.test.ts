@@ -4,7 +4,7 @@ import test from "node:test";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 
-test("real stdio protocol lists ten tools, lists/searches/details and inserts selected/explicit drawing", async () => {
+test("real stdio protocol lists thirteen tools, lists/searches/details and inserts selected/explicit drawing", async () => {
   const library = { items: Array.from({ length: 25 }, (_, i) => ({ id: `icon-${i}`, ...(i === 0 ? { name: "Synthetic service" } : {}), elements: [{ id: "shape", type: "rectangle", x: 0, y: 0, width: 100, height: 50, angle: 0, groupIds: ["source-group"], customData: { keep: true } }, { id: "text", type: "text", x: 5, y: 5, width: 80, height: 30, angle: 0, text: `Synthetic label ${i}` }] })) };
   const libraryBefore = JSON.stringify(library);
   const scenes = new Map(["selected", "explicit"].map(id => [id, { id, name: id, engine: "excalidraw", version: 2, elements: [{ id: "existing", type: "rectangle", x: 400, y: 400, width: 30, height: 30 }] as Record<string, unknown>[] }]));
@@ -37,7 +37,7 @@ test("real stdio protocol lists ten tools, lists/searches/details and inserts se
   try {
     await client.connect(transport);
     const { tools } = await client.listTools();
-    assert.equal(tools.length, 10);
+    assert.equal(tools.length, 13);
     for (const name of ["list_library_items", "get_library_item", "insert_library_item"]) assert.ok(tools.some(t => t.name === name));
     for (const name of ["list_library_items", "get_library_item"]) assert.deepEqual(tools.find(tool => tool.name === name)?.annotations, { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false });
     assert.deepEqual(tools.find(tool => tool.name === "insert_library_item")?.annotations, { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false });

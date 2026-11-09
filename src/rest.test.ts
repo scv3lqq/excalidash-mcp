@@ -290,3 +290,18 @@ test("createServer accepts a source URL override and validates HTTPS", async () 
     assert.throws(() => createConfiguredServer(new ExcaliDashClient(settings()), undefined, sourceUrl), /MCP_SOURCE_URL must be an HTTPS URL/);
   }
 });
+
+test("REST getScene exposes the authoritative full snapshot through the authenticated bounded reader", async () => {
+  const { client, stored, requests } = memoryClient();
+  const snapshot = await client.getScene("drawing");
+  assert.deepEqual(snapshot, { ...stored(), engine: "excalidraw" });
+  assert.deepEqual(requests.map(request => request.init?.method), ["GET"]);
+  assert.equal((requests[0]?.init?.headers as Record<string, string>).Authorization, `Bearer ${token}`);
+});
+
+test("legacy getScene rejects clearly without HTTP", async () => {
+  let calls = 0;
+  const client = new ExcaliDashClient({ ...settings(), apiMode: undefined }, async () => { calls += 1; return Response.json(scene()); });
+  await assert.rejects(client.getScene("drawing"), /REST mode/);
+  assert.equal(calls, 0);
+});

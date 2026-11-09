@@ -2,6 +2,9 @@
 import { McpServer } from "@modelcontextprotocol/server";
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import * as z from "zod/v4";
+import { opSchema } from "./agent/opSchemas.js";
+import { inspectScene, inspectionOptionsSchema, validateDrawing, validationOptionsSchema } from "./drawing-analysis.js";
+import { renderDrawing, renderOptionsSchema } from "./drawing-renderer.js";
 import { registerLibraryTools } from "./library-tools.js";
 import {
   configFromEnv,
@@ -10,82 +13,7 @@ import {
   validateSourceUrl,
 } from "./excalidash.js";
 
-const style = z.record(z.string(), z.unknown());
 const id = z.string().min(1);
-
-const op = z.discriminatedUnion("op", [
-  z.object({
-    op: z.literal("add_shape"),
-    ref: z.string().regex(/^[A-Za-z][A-Za-z0-9_-]{0,63}$/).optional(),
-    shape: z.enum(["rectangle", "ellipse", "diamond", "text", "frame"]),
-    x: z.number(),
-    y: z.number(),
-    w: z.number().positive().optional(),
-    h: z.number().positive().optional(),
-    label: z.string().optional(),
-    style: style.optional(),
-  }),
-  z.object({
-    op: z.literal("connect"),
-    fromId: id,
-    toId: id,
-    label: z.string().optional(),
-    style: style.optional(),
-    arrowType: z.enum(["arrow", "line"]).optional(),
-  }),
-  z.object({ op: z.literal("set_text"), id, text: z.string() }),
-  z.object({ op: z.literal("set_style"), id, style }),
-  z
-    .object({
-      op: z.literal("move"),
-      id,
-      dx: z.number().optional(),
-      dy: z.number().optional(),
-      x: z.number().optional(),
-      y: z.number().optional(),
-    })
-    .refine((value) => {
-      const relative = value.dx !== undefined || value.dy !== undefined;
-      const absolute = value.x !== undefined || value.y !== undefined;
-      return relative !== absolute;
-    }, "move requires either (dx,dy) or (x,y), not both"),
-  z.object({
-    op: z.literal("resize"),
-    id,
-    w: z.number().positive(),
-    h: z.number().positive(),
-  }),
-  z.object({
-    op: z.literal("align"),
-    ids: z.array(id).min(2).max(100),
-    alignment: z.enum(["left", "center", "right", "top", "middle", "bottom"]),
-  }),
-  z.object({
-    op: z.literal("distribute"),
-    ids: z.array(id).min(2).max(100),
-    direction: z.enum(["horizontal", "vertical"]),
-    gap: z.number().nonnegative().optional(),
-  }),
-  z.object({
-    op: z.literal("layout"),
-    ids: z.array(id).min(1).max(100),
-    direction: z.enum(["horizontal", "vertical", "grid"]),
-    gap: z.number().nonnegative().max(2000).optional(),
-    columns: z.number().int().positive().max(20).optional(),
-    x: z.number().optional(),
-    y: z.number().optional(),
-  }),
-  z.object({ op: z.literal("group"), ids: z.array(id).min(2).max(100) }),
-  z.object({ op: z.literal("delete"), id }),
-  z.object({
-    op: z.literal("import_elements"),
-    elements: z.array(z.record(z.string(), z.unknown())).min(1).max(5000),
-  }),
-  z.object({
-    op: z.literal("revert_to_snapshot"),
-    version: z.number().int().nonnegative(),
-  }),
-]);
 
 const textResult = (text: string) => ({
   content: [{ type: "text" as const, text }],
@@ -99,6 +27,7 @@ const errorResult = (error: unknown) => ({
     },
   ],
   isError: true,
+  ...((error && typeof error === "object" && "details" in error && error.details) ? { structuredContent: { error: error.details as Record<string, unknown> } } : {}),
 });
 
 export const createServer = (
@@ -255,6 +184,47 @@ export const createServer = (
     },
   );
 
+  const readAnnotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
+  server.registerTool("get_drawing_elements", {
+    description: "Read ordered drawing elements with filters and revision-pinned pagination. Requires REST mode.",
+    inputSchema: inspectionOptionsSchema.extend({ drawingId: id.optional() }),
+    annotations: readAnnotations,
+  }, async ({ drawingId, ...options }) => {
+    try {
+      return textResult(JSON.stringify(inspectScene(await client.getScene(resolveDrawingId(drawingId)), options)));
+    } catch (error) {
+      return errorResult(error);
+    }
+  });
+  server.registerTool("validate_drawing", {
+    description: "Check drawing geometry and references without modifying the saved scene. Requires REST mode.",
+    inputSchema: validationOptionsSchema.extend({ drawingId: id.optional() }),
+    annotations: readAnnotations,
+  }, async ({ drawingId, ...options }) => {
+    try {
+      return textResult(JSON.stringify(validateDrawing(await client.getScene(resolveDrawingId(drawingId)), options)));
+    } catch (error) {
+      return errorResult(error);
+    }
+  });
+
+  server.registerTool("render_drawing", {
+    description: "Render one authoritative saved drawing snapshot as a PNG using the official Excalidraw renderer. Requires REST mode and a sandboxed browser.",
+    inputSchema: renderOptionsSchema.safeExtend({ drawingId: id.optional() }),
+    annotations: readAnnotations,
+  }, async ({ drawingId, ...options }) => {
+    try {
+      const scene = await client.getScene(resolveDrawingId(drawingId));
+      const { png, ...metadata } = await renderDrawing(scene, options);
+      return { content: [
+        { type: "text" as const, text: JSON.stringify(metadata) },
+        { type: "image" as const, mimeType: "image/png", data: png.toString("base64") },
+      ] };
+    } catch (error) {
+      return errorResult(error);
+    }
+  });
+
   server.registerTool(
     "apply_drawing_ops",
     {
@@ -262,11 +232,12 @@ export const createServer = (
         "Atomically apply up to 50 semantic operations. Uses drawingId when provided, otherwise the selected drawing. Read the summary first.",
       inputSchema: z.object({
         drawingId: id.optional(),
-        ops: z.array(op).min(1).max(50),
+        ops: z.array(opSchema).min(1).max(50),
         clientBatchId: z.string().max(200).optional(),
+        expectedRevision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
       }),
     },
-    async ({ drawingId, ops, clientBatchId }) => {
+    async ({ drawingId, ops, clientBatchId, expectedRevision }) => {
       try {
         return textResult(
           JSON.stringify(
@@ -274,6 +245,7 @@ export const createServer = (
               resolveDrawingId(drawingId),
               ops,
               clientBatchId,
+              expectedRevision,
             ),
             null,
             2,
