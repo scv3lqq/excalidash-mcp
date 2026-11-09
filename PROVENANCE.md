@@ -16,7 +16,8 @@ It does not install a historical backend or runtime.
 - Vendored changes: relative import specifiers gain `.js` for NodeNext;
   array accesses proven in bounds gain non-null assertions in `elementFactory`,
   `layoutOps`, and `summary`; one text-line callback gains a string annotation.
-  Pure helper algorithms are otherwise unchanged.
+  Scene binding updates now affect only actual geometry dependencies and preserve
+  unrelated routes and labels. Shared operation schemas also validate MCP input.
 - `excalidash.ts` and `index.ts` adapt ExcaliDash MCP commit
   `68d2119f12f2578f7996d68a518608d87e83a3bd`, originally MIT licensed.
   The original MIT copyright and permission notice is reproduced below.
@@ -81,3 +82,39 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+
+## Official drawing renderer additions
+
+Stable compatibility was checked against ExcaliDash `v0.6.7`, commit
+`0f9be2d8649be7650e6bee2844739c584fa76c35`; its frontend lock pins
+`@excalidraw/excalidraw` 0.18.1. Source:
+https://github.com/zimengxiong/ExcaliDash/tree/v0.6.7 .
+
+The drawing renderer uses official Excalidraw 0.18.1 `exportToCanvas`,
+`exportToSvg` (region crops), and `getCommonBounds` in a sandboxed browser, with the
+package's locally hosted fonts. Excalidraw is MIT licensed. Retained renderer and
+individual font notices are in `assets/excalidraw-NOTICES.txt`, including Excalifont
+and Xiaolai OFL notices and the older Liberation GPLv2/font-exception notice.
+Font licenses are recorded individually rather than assigned the renderer's MIT
+license. Preserve these notices and copied assets with corresponding buildable source.
+Official source:
+https://github.com/excalidraw/excalidraw/tree/v0.18.1 .
+
+`drawing-analysis.ts`, `drawing-renderer.ts`, `render-worker.ts`,
+`renderer-entry.ts`, the renderer build script and workflow tests are additions
+to this combined AGPL-3.0-only source. The official scene exporter is distinct
+from the approximate resvg Library preview renderer. Browser memory is outside
+the worker JavaScript heap cap; no hard host memory guarantee or Alpine/256 MiB
+container certification is asserted. Protocol fixtures use synthetic mocked
+backend storage and real stdio/HTTP, not production accounts.
+
+The separate native verifier, `scripts/check-backend.mjs` with
+`scripts/backend-fixture.cjs`, downloads the stable source commit above and checks
+archive SHA-256 `a9984fbb59e7710f5a402f1a0fc2b0349b18eeb4474d1753d4e36a73880d59e2`.
+It runs real upstream routes with isolated synthetic SQLite data and linked
+in-memory MCP transports. Its successful checkpointed resume verified saved-scene
+render/refine/readback and backend revision semantics without repeating committed
+creates. This is distinct from the mocked protocol suite. Native Library scope
+integration is not claimed because unpatched stable lacks `library:read`; no
+production backend, real accounts or private data are included in these fixtures.

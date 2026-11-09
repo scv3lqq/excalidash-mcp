@@ -23,15 +23,21 @@
     "assets"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/build-renderer.mjs",
     "start": "node dist/index.js",
     "start:http": "node dist/http.js",
-    "test": "npm run build && node --test dist/**/*.test.js"
+    "test": "npm run build && node --test --test-concurrency=1 dist/**/*.test.js",
+    "test:unit": "npm run build && node --test --test-concurrency=1 dist/excalidash.test.js dist/rest.test.js dist/http.test.js dist/mcp.test.js dist/library.test.js dist/library-mcp.test.js dist/library-preview.test.js dist/drawing-analysis.test.js dist/mutation-preservation.test.js"
   },
   "dependencies": {
+    "@excalidraw/excalidraw": "0.18.1",
     "@modelcontextprotocol/node": "2.1.2",
     "@modelcontextprotocol/server": "2.4.0",
     "@resvg/resvg-js": "2.6.2",
+    "esbuild": "0.28.2",
+    "playwright-core": "1.65.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
     "zod": "4.6.7"
   },
   "devDependencies": {
@@ -41,7 +47,13 @@
   },
   "overrides": {
     "@hono/node-server": "2.1.6",
-    "hono": "4.13.17"
+    "hono": "4.13.17",
+    "lodash-es": "4.18.1",
+    "nanoid": "3.3.20",
+    "katex": "0.19.1",
+    "@excalidraw/mermaid-to-excalidraw": {
+      "nanoid": "5.1.16"
+    }
   },
   "engines": {
     "node": ">=20"

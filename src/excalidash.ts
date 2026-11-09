@@ -1,4 +1,4 @@
-import { RestAdapter } from "./rest.js";
+import { RestAdapter, type RestDrawing } from "./rest.js";
 import {
   assertLibraryItemInsertable,
   listLibraryItems as selectLibraryItems,
@@ -43,6 +43,7 @@ export class ExcaliDashError extends Error {
   constructor(
     message: string,
     readonly status?: number,
+    readonly details?: Record<string, unknown>,
   ) {
     super(message);
     this.name = "ExcaliDashError";
@@ -143,6 +144,11 @@ export class ExcaliDashClient {
     return this.request(`drawings/${encodeURIComponent(drawingId)}`);
   }
 
+  getScene(drawingId: string): Promise<RestDrawing> {
+    if (!this.rest) return Promise.reject(new ExcaliDashError("Scene inspection requires REST mode", 422));
+    return this.rest.scene(drawingId);
+  }
+
   getSummary(drawingId: string): Promise<string> {
     if (this.rest) return this.rest.summary(drawingId);
     return this.request(
@@ -162,8 +168,10 @@ export class ExcaliDashClient {
     drawingId: string,
     ops: unknown[],
     clientBatchId?: string,
+    expectedRevision?: number,
   ): Promise<unknown> {
-    if (this.rest) return this.rest.apply(drawingId, ops, clientBatchId);
+    if (this.rest) return this.rest.apply(drawingId, ops, clientBatchId, expectedRevision);
+    if (expectedRevision !== undefined) return Promise.reject(new ExcaliDashError("Expected revision requires REST mode", 422));
     return this.request(`drawings/${encodeURIComponent(drawingId)}/ops`, {
       method: "POST",
       body: JSON.stringify({ ops, ...(clientBatchId ? { clientBatchId } : {}) }),
@@ -229,6 +237,7 @@ export class ExcaliDashClient {
         throw new ExcaliDashError(
           `${conflict}ExcaliDash request failed (${response.status})${detail ? `: ${detail}` : ""}`,
           response.status,
+          conflict ? { code: "VERSION_CONFLICT" } : undefined,
         );
       }
       return (options.responseType === "text" ? text : JSON.parse(text)) as T;

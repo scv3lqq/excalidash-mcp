@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from "node:util";
+import { elementBounds, validateDrawing, type Bounds } from "./drawing-analysis.js";
 import { applyOps } from "./agent/applyOps.js";
 import type { ExcalidrawElement } from "./agent/elementFactory.js";
 import { opsBatchSchema, type OpsBatch } from "./agent/opSchemas.js";
@@ -10,9 +12,10 @@ type RequestOptions = {
   responseType?: "json" | "text";
 };
 type Request = <T = unknown>(path: string, options?: RequestOptions) => Promise<T>;
-type RestDrawing = DrawingSummary & {
+export type RestDrawing = DrawingSummary & {
   elements: ExcalidrawElement[];
   appState?: Record<string, unknown>;
+  files?: Record<string, unknown>;
 };
 const MAX_ELEMENTS = 10_000;
 const MAX_BODY_BYTES = 10 * 1024 * 1024;
@@ -23,7 +26,7 @@ const normalizeEngine = <T extends DrawingSummary>(drawing: T): T => ({
   engine: drawing.engine ?? "excalidraw",
 });
 
-function validateScene(value: unknown): RestDrawing {
+export function validateScene(value: unknown): RestDrawing {
   if (!value || typeof value !== "object") {
     throw new ExcaliDashError("Invalid drawing response");
   }
@@ -111,10 +114,19 @@ export class RestAdapter {
     return { element, children };
   }
 
-  async apply(id: string, ops: unknown[], clientBatchId?: string) {
+  async apply(id: string, ops: unknown[], clientBatchId?: string, expectedRevision?: number) {
     // Reject unsupported history access and invalid batches before sending any HTTP.
     const batch = validateBatch(ops, clientBatchId);
-    const prepared = prepareRestBatch(await this.scene(id), batch.ops, clientBatchId);
+    if (expectedRevision !== undefined && (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0)) {
+      throw new ExcaliDashError("expectedRevision requires a safe nonnegative integer", 422);
+    }
+    const before = await this.scene(id);
+    if (expectedRevision !== undefined && expectedRevision !== before.version) {
+      throw new ExcaliDashError("VERSION_CONFLICT: perform a fresh read before applying a new batch.", 409, {
+        code: "VERSION_CONFLICT", expectedRevision, actualRevision: before.version,
+      });
+    }
+    const prepared = prepareRestBatch(before, batch.ops, clientBatchId);
     const body = JSON.stringify({ elements: prepared.elements, version: prepared.version });
     if (Buffer.byteLength(body, "utf8") > MAX_BODY_BYTES) {
       throw new ExcaliDashError("Drawing request exceeds 10 MiB limit");
@@ -126,6 +138,7 @@ export class RestAdapter {
     const changed = new Set(changedIds);
     return {
       version: saved.version,
+      ...mutationMetadata(before, saved),
       results: prepared.results.map(result => ({ ...result, ...(result.createdIds ? { createdIds: result.createdIds.filter(elementId => savedIds.has(elementId)) } : {}) })),
       changedIds,
       summaryDelta: summarizeElements(saved.elements.filter(el => changed.has(el.id))),
@@ -134,7 +147,49 @@ export class RestAdapter {
     };
   }
 
-  private async scene(id: string): Promise<RestDrawing> {
+  async scene(id: string): Promise<RestDrawing> {
     return validateScene(await this.request(pathFor(id)));
   }
+}
+
+
+function mutationMetadata(before: RestDrawing, saved: RestDrawing) {
+  const previous = new Map(before.elements.map(element => [element.id, element]));
+  const current = new Map(saved.elements.map(element => [element.id, element]));
+  const createdIds: string[] = [];
+  const modifiedIds: string[] = [];
+  const deletedIds: string[] = [];
+  const changed: ExcalidrawElement[] = [];
+  for (const element of before.elements) {
+    const after = current.get(element.id);
+    if (!element.isDeleted && (!after || after.isDeleted)) {
+      deletedIds.push(element.id);
+      changed.push(element);
+      if (after) changed.push(after);
+    }
+  }
+  for (const element of saved.elements) {
+    const old = previous.get(element.id);
+    if (element.isDeleted) continue;
+    if (!old || old.isDeleted) {
+      createdIds.push(element.id);
+      changed.push(element);
+      if (old) changed.push(old);
+    } else if (!isDeepStrictEqual(element, old)) {
+      modifiedIds.push(element.id);
+      changed.push(old, element);
+    }
+  }
+  const bounds = changed.map(elementBounds).filter((value): value is Bounds => value !== null);
+  const left = Math.min(...bounds.map(bound => bound.x));
+  const top = Math.min(...bounds.map(bound => bound.y));
+  const validation = validateDrawing(saved);
+  return {
+    createdIds, modifiedIds, deletedIds,
+    changedBounds: bounds.length ? { x: left, y: top,
+      width: Math.max(...bounds.map(bound => bound.x + bound.width)) - left,
+      height: Math.max(...bounds.map(bound => bound.y + bound.height)) - top } : null,
+    validationWarnings: validation.issues,
+    validationSkippedChecks: validation.skippedChecks,
+  };
 }

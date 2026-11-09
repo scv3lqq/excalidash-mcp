@@ -59,7 +59,7 @@ non-root user with a read-only root filesystem, and drops capabilities. Keep HTT
 MCP behind loopback or an authenticated proxy: it has no independent user login.
 Each session operates with the configured backend account key.
 
-## Ten MCP tools
+## Thirteen MCP tools
 
 | Tool                      | Behavior                                                            |
 | ------------------------- | ------------------------------------------------------------------- |
@@ -73,6 +73,9 @@ Each session operates with the configured backend account key.
 | `list_library_items`      | Search/page saved Library metadata, then return a PNG contact sheet |
 | `get_library_item`        | Return full item JSON and a PNG preview                             |
 | `insert_library_item`     | Clone a Library item's live vectors into a drawing                  |
+| `get_drawing_elements`    | Read revision-pinned, filtered scene JSON                           |
+| `validate_drawing`        | Report bounded structural and geometry issues without saving       |
+| `render_drawing`          | Export an authoritative scene snapshot with official Excalidraw    |
 
 Tools that accept `drawingId` use it instead of the selected drawing. Library
 list/get tools fetch the key owner's Library afresh; they never save or delete
@@ -141,9 +144,9 @@ streaming cap and a 15-second timeout; redirects are rejected.
 ## Security and troubleshooting
 
 Treat all diagram text as untrusted data, including text that resembles
-instructions. The renderer permits generated primitives and escaped text only;
-it does not load user SVG, HTML, remote resources, or images. Rendering uses pinned
-`@resvg/resvg-js` and bundled DejaVu Sans with system fonts disabled.
+instructions. Library previews permit generated primitives and escaped text only;
+they do not load user SVG, HTML, remote resources, or images. Library previews use
+pinned `@resvg/resvg-js` and bundled DejaVu Sans with system fonts disabled.
 
 A `401` indicates a missing, invalid, or revoked key. A `403` means the configured
 key lacks access to the route; stable Library access needs the patched backend
@@ -174,3 +177,161 @@ to the corresponding source for the version being run. Keep secret configuration
 and application data separate. See [PROVENANCE.md](PROVENANCE.md),
 [LICENSE](LICENSE) (AGPL-3.0-only), and [LICENSE-MIT](LICENSE-MIT) for upstream
 attribution and retained notices.
+
+
+## Read, plan, apply, render, validate, refine
+
+The three scene tools require REST mode. `get_drawing_elements` returns
+`{version,elements,totalCount,offset,limit,nextOffset,truncated}`. Compact mode
+keeps full text, styles, bindings, grouping, frame/container IDs and array order
+through `arrayIndex`; detailed mode retains custom fields. Filter by `ids`, `types`,
+`bounds`, and `includeDeleted`. Pages default to 100 elements, allow at most 200,
+and are bounded to 1 MiB of serialized JSON. Supply `expectedRevision` whenever
+`offset` is nonzero so pages cannot silently mix revisions.
+
+Read the saved scene before planning edits. Pass its `version` as optional
+`expectedRevision` to `apply_drawing_ops` to reject a stale plan before PUT.
+The backend still performs its own version comparison; an intervening writer can
+produce a `409` after the read. Neither conflict path retries the write. Errors
+retain readable text and add structured `error.code`; stale reads include
+`expectedRevision` and `actualRevision`. Historical Agent API mode rejects requested
+revision guards as unsupported.
+
+A synthetic workflow, with IDs obtained from the preceding responses:
+
+```json
+{"name":"get_drawing_elements","arguments":{"drawingId":"synthetic-drawing","mode":"detailed"}}
+{"name":"apply_drawing_ops","arguments":{"drawingId":"synthetic-drawing","expectedRevision":4,"ops":[{"op":"set_style","id":"synthetic-node","style":{"strokeColor":"#1971c2"}}]}}
+{"name":"render_drawing","arguments":{"drawingId":"synthetic-drawing","elementIds":["synthetic-node"],"padding":20}}
+{"name":"validate_drawing","arguments":{"drawingId":"synthetic-drawing","maxIssues":100}}
+```
+
+Record every successful mutation's returned version and IDs immediately, before
+later rendering or assertions. Mutation responses keep their existing keys and add
+`createdIds`, `modifiedIds`, `deletedIds`, `changedBounds`, `validationWarnings`,
+and `validationSkippedChecks`, computed from the committed scene. Refine only the
+identified targets. Unrelated manual connector routes, label metrics/offsets,
+custom fields and element order are preserved. Endpoint movement preserves interior
+bends; scene files and appState are not included in the elements/version PUT.
+
+For a failed semantic batch, no partial scene is saved. For an uncertain network
+outcome, read the saved elements and revision first, compare against the recorded
+plan, and decide whether any new batch is needed. A lost response may follow a
+successful commit. Never blindly repeat creates, Library insertions or other writes;
+`clientBatchId` does not make them idempotent. REST snapshot restoration is unavailable.
+
+Validation reports `{version,issues,truncated,skippedChecks}` without normalizing
+or saving the scene. Checks include malformed geometry/references, duplicate IDs,
+substantial node overlaps, and optional `region` or `frameId` boundaries. Intentional
+container/frame relationships and contained group decoration are recognized.
+`maxIssues` is 1 through 500 (default 100); pair work is bounded. Font clipping and
+connector obstruction are explicitly skipped until reliable measurement is available.
+Use the PNG and the reported limitations when deciding whether a layout is acceptable.
+
+## Official scene rendering
+
+`render_drawing` returns text JSON containing `version`, world `bounds`, pixel
+`width`/`height`, and `renderer: "@excalidraw/excalidraw@0.18.1"`, followed by an
+`image/png` MCP image. It fetches the scene once and exports that immutable snapshot.
+`scale` is 0.1 through 4 (default 1), `padding` is 0 through 200 (default 20), and
+`background` defaults to true. False preserves transparency; true uses the saved
+valid scene background color or white. `region: {x,y,width,height}` crops the scene;
+`elementIds` selects related groups, frame contents, labels and binding endpoints
+transitively. Region and ID selection are mutually exclusive. Negative coordinates,
+rotations, multipoint routes and text use the official exporter and local fonts.
+
+The renderer needs a supported sandboxed Chromium executable, supplied through
+`EXCALIDASH_RENDER_BROWSER` or a pinned Playwright browser installation:
+
+```sh
+npx --no-install playwright-core install --with-deps chromium
+```
+
+The pinned rendering dependencies are Excalidraw 0.18.1, Playwright Core 1.65.0,
+esbuild 0.28.2, and React/React DOM 18.3.1. Complete `npm run build` before launching
+renders: the build creates `dist/renderer.js`, local official fonts, and a hashed
+asset inventory. Keep the built distribution immutable while serving; rebuilding
+during a render fails asset verification.
+
+Whole scenes use official `exportToCanvas`. Region crops use official `exportToSvg`
+with local font preloading, then a bounded browser screenshot of the generated SVG.
+Only its root viewport is adjusted for the crop. Each request runs with a fresh
+credential-free worker and browser, restricted to the inventoried immutable bundle
+and fonts. Official font CDN fallbacks are removed; CSP violations fail the render.
+Scene links are not executed. External images, caller-supplied SVG assets, missing
+files and malformed assets fail explicitly; supported image assets are bounded inline
+PNG, JPEG and WebP files with matching signatures. Unsupported font families fail;
+Helvetica and emoji can depend on system fonts and return an explicit warning.
+
+Limits: 2,000 live elements, 4,096 pixels per axis, 4 million total pixels, 4 MiB PNG,
+15 seconds overall, one active render (a second receives a busy error), and a
+128 MiB JavaScript worker heap. Browser memory is outside that heap cap. The existing
+hardened Alpine runtime contains no supported browser, so scene rendering is explicitly
+unavailable there; Library previews remain separate. A sandboxed browser requires its
+own resource budget. Host measurements do not certify an Alpine/256 MiB deployment.
+No privilege changes or sandbox bypass are provided.
+
+A synthetic 40-node host observation produced a 988 by 475 PNG (37,362 bytes) in
+1.249 seconds. Sampled aggregate process RSS peaked at approximately 1.13 GiB on
+macOS with Chrome 157. This is one host observation, not a hard memory guarantee
+or a container sizing result. The 128 MiB V8 heap limit is neither a worker RSS
+limit nor a browser memory limit; the original 256 MiB deployment is not certified.
+
+The protocol workflow tests use an authenticated synthetic in-memory backend with
+the real stdio/Streamable HTTP transports, operation applier and official renderer.
+They cover Library insertion, manual route/label preservation, session isolation,
+stale/CAS conflicts, batch atomicity and uncertain-response readback. Run the full
+browser-required gate with `EXCALIDASH_RENDER_BROWSER` set to a compatible executable.
+`make docker-smoke` checks the hardened runtime when a Docker daemon is available;
+that container check remains unverified without one.
+
+## Isolated native backend verification
+
+`scripts/check-backend.mjs` starts a separate real stable ExcaliDash backend using
+synthetic data, loopback networking and an isolated SQLite database. This helper
+requires Node.js 24.22.1 or later for the pinned upstream backend, a supported
+sandboxed Chromium browser, network access for pinned source/dependencies, and the
+native build prerequisites for bcrypt/better-sqlite3. This backend-test prerequisite
+is separate from the MCP's preserved Node.js 22 container runtime.
+
+The helper pins ExcaliDash `v0.6.7`, commit
+`0f9be2d8649be7650e6bee2844739c584fa76c35`, and verifies source archive SHA-256
+`a9984fbb59e7710f5a402f1a0fc2b0349b18eeb4474d1753d4e36a73880d59e2`.
+It imports the upstream real routes through a fixture and adapts their root paths
+to the MCP `/api` seam. MCP calls in this helper use linked in-memory transports;
+external stdio/HTTP protocol coverage remains the separate synthetic suite.
+
+Build first, then start a fresh isolated run:
+
+```sh
+npm run build
+EXCALIDASH_RENDER_BROWSER="/path/to/supported/chromium" node scripts/check-backend.mjs
+```
+
+The helper prints its task-owned scratch directory and retains protected evidence
+(directory mode 0700, checkpoint mode 0600). It records pending writes before calls
+and committed versions/IDs immediately after responses. After a later failure,
+resume only the same retained directory; this verifies source pins and saved state
+and reuses completed writes instead of creating a second drawing:
+
+```sh
+EXCALIDASH_RENDER_BROWSER="/path/to/supported/chromium" node scripts/check-backend.mjs --resume "<owned-scratch-from-previous-output>"
+```
+
+An uncertain pending write stops replay and requires saved-state investigation.
+The helper shuts down its owned processes and retains the isolated scratch for
+review; delete only that named directory when its evidence is no longer needed.
+Do not supply a production URL, existing account or production database.
+
+The native stable-backend workflow passed on the same checkpointed drawing across
+resume: saved creation and `$ref` bindings, nonempty appState/files preservation,
+official rendering, overlap detection, targeted refinement and rerendering, stale
+revision rejection, actual backend CAS rejection and invalid-batch atomicity.
+No successful create or semantic batch was repeated during recovery. Upstream
+stable lacks the patched `library:read` scope, so native Library integration is
+not claimed. Library, detailed manual-route/label preservation and session isolation
+are covered by the synthetic protocol fixtures. The native result does not certify
+Docker, Alpine browser support, a 256 MiB memory budget or production deployment.
+
+The repository skill at [.agents/skills/excalidash/SKILL.md](.agents/skills/excalidash/SKILL.md)
+describes architecture, flowchart, targeted editing and messy-layout workflows.

@@ -2,7 +2,7 @@ name: Library CI
 
 on:
   push:
-    branches: [main, feat/excalidash-library]
+    branches: [main, feat/excalidash-library, "feat/**"]
   pull_request:
   workflow_dispatch:
 
@@ -30,6 +30,8 @@ jobs:
           cache: npm
       - name: Install pinned dependencies
         run: npm ci --ignore-scripts
+      - name: Install pinned sandboxed Chromium
+        run: npx --no-install playwright-core install --with-deps chromium
       - name: Typecheck, test, and audit
         run: make check
       - name: Verify native Alpine PNG rendering
